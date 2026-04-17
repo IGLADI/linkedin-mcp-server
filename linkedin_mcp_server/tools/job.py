@@ -76,8 +76,9 @@ def register_job_tools(mcp: FastMCP) -> None:
         exclude_args=["extractor"],
     )
     async def search_jobs(
-        keywords: str,
         ctx: Context,
+        scrape_url: str | None = None,
+        keywords: str | None = None,
         location: str | None = None,
         max_pages: Annotated[int, Field(ge=1, le=10)] = 3,
         date_posted: str | None = None,
@@ -92,30 +93,19 @@ def register_job_tools(mcp: FastMCP) -> None:
         Search for jobs on LinkedIn.
 
         Returns job_ids that can be passed to get_job_details for full info.
-
-        Args:
-            keywords: Search keywords (e.g., "software engineer", "data scientist")
-            ctx: FastMCP context for progress reporting
-            location: Optional location filter (e.g., "San Francisco", "Remote")
-            max_pages: Maximum number of result pages to load (1-10, default 3)
-            date_posted: Filter by posting date (past_hour, past_24_hours, past_week, past_month)
-            job_type: Filter by job type, comma-separated (full_time, part_time, contract, temporary, volunteer, internship, other)
-            experience_level: Filter by experience level, comma-separated (internship, entry, associate, mid_senior, director, executive)
-            work_type: Filter by work type, comma-separated (on_site, remote, hybrid)
-            easy_apply: Only show Easy Apply jobs (default false)
-            sort_by: Sort results (date, relevance)
-
-        Returns:
-            Dict with url, sections (name -> raw text), job_ids (list of
-            numeric job ID strings usable with get_job_details), and optional references.
         """
         try:
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="search_jobs"
             )
+
+            if not keywords and not scrape_url:
+                raise ValueError("Either keywords or scrape_url must be provided")
+
             logger.info(
-                "Searching jobs: keywords='%s', location='%s', max_pages=%d",
+                "Searching jobs: keywords='%s', scrape_url='%s', location='%s', max_pages=%d",
                 keywords,
+                scrape_url,
                 location,
                 max_pages,
             )
@@ -124,20 +114,26 @@ def register_job_tools(mcp: FastMCP) -> None:
                 progress=0, total=100, message="Starting job search"
             )
 
-            result = await extractor.search_jobs(
-                keywords,
-                location=location,
-                max_pages=max_pages,
-                date_posted=date_posted,
-                job_type=job_type,
-                experience_level=experience_level,
-                work_type=work_type,
-                easy_apply=easy_apply,
-                sort_by=sort_by,
-            )
+            if scrape_url:
+                result = await extractor.search_jobs(
+                    scrape_url=scrape_url,
+                    location=location,
+                    max_pages=max_pages,
+                )
+            else:
+                result = await extractor.search_jobs(
+                    keywords=keywords,
+                    location=location,
+                    max_pages=max_pages,
+                    date_posted=date_posted,
+                    job_type=job_type,
+                    experience_level=experience_level,
+                    work_type=work_type,
+                    easy_apply=easy_apply,
+                    sort_by=sort_by,
+                )
 
             await ctx.report_progress(progress=100, total=100, message="Complete")
-
             return result
 
         except AuthenticationError as e:
