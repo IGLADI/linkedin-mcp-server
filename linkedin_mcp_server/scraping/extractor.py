@@ -645,6 +645,35 @@ class LinkedInExtractor:
             )
             await asyncio.sleep(pause_time)
 
+    def _company_root_url(self, linkedin_url: str) -> str:
+        parsed = urlparse(linkedin_url)
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 3 and parts[0] == "company" and parts[2] == "jobs":
+            return f"{parsed.scheme}://{parsed.netloc}/company/{parts[1]}/"
+        return linkedin_url
+
+    async def _goto_jobs_section(self, linkedin_url: str) -> bool:
+        try:
+            path = urlparse(linkedin_url).path.strip("/")
+            parts = path.split("/")
+            company_name = parts[1] if len(parts) >= 2 and parts[0] == "company" else None
+            if not company_name:
+                return False
+
+            company_root = f"https://www.linkedin.com/company/{company_name}/"
+            await self._navigate_to_page(company_root)
+            await detect_rate_limit(self._page)
+
+            jobs_tab_selector = f'a[href*="/company/{company_name}/jobs/"]'
+            job_link = self._page.locator(jobs_tab_selector).first
+            if await job_link.count() > 0:
+                await job_link.scroll_into_view_if_needed(timeout=2000)
+                await job_link.click(timeout=2000)
+                return True
+        except Exception:
+            pass
+        return False
+
     async def extract_page(
         self,
         url: str,
@@ -693,6 +722,39 @@ class LinkedInExtractor:
         max_scrolls: int | None = None,
     ) -> ExtractedSection:
         """Single attempt to navigate, scroll, and extract innerText."""
+        
+        if section_name == "jobs":
+            jobs_url = self._company_root_url(url)
+            if not await self._goto_jobs_section(jobs_url):
+                return ExtractedSection(text="", references=[])
+
+            search_button = self._page.locator(
+                'a[data-view-name="org-member-jobs-job-search-button"]'
+            ).first
+
+            try:
+                await search_button.wait_for(state="visible", timeout=10000)
+                href = await search_button.get_attribute("href")
+                if not href:
+                    return ExtractedSection(text="", references=[])
+
+                query = parse_qs(urlparse(href).query)
+                values = query.get("f_C")
+                company_id = values[0] if values else None
+                if not company_id:
+                    return ExtractedSection(text="", references=[])
+
+                return ExtractedSection(
+                    text=company_id,
+                    references=build_references(
+                        [{"url": href, "text": company_id}],
+                        section_name,
+                    ),
+                )
+            except Exception:
+                logger.debug("Jobs search button not available on %s", jobs_url)
+                return ExtractedSection(text="", references=[])
+
         await self._navigate_to_page(url)
         await detect_rate_limit(self._page)
 
@@ -2034,7 +2096,8 @@ class LinkedInExtractor:
 
     async def search_jobs(
         self,
-        keywords: str,
+        scrape_url: str | None = None,
+        keywords: str | None = None,
         location: str | None = None,
         max_pages: int = 3,
         date_posted: str | None = None,
@@ -2042,7 +2105,7 @@ class LinkedInExtractor:
         experience_level: str | None = None,
         work_type: str | None = None,
         easy_apply: bool = False,
-        sort_by: str | None = None,
+        sort_by: str | None = None
     ) -> dict[str, Any]:
         """Search for jobs with pagination and job ID extraction.
 
@@ -2064,16 +2127,21 @@ class LinkedInExtractor:
         Returns:
             {url, sections: {search_results: text}, job_ids: [str]}
         """
-        base_url = self._build_job_search_url(
-            keywords,
-            location=location,
-            date_posted=date_posted,
-            job_type=job_type,
-            experience_level=experience_level,
-            work_type=work_type,
-            easy_apply=easy_apply,
-            sort_by=sort_by,
-        )
+        if scrape_url:
+            base_url = scrape_url
+        elif keywords:
+            base_url = self._build_job_search_url(
+                keywords,
+                location=location,
+                date_posted=date_posted,
+                job_type=job_type,
+                experience_level=experience_level,
+                work_type=work_type,
+                easy_apply=easy_apply,
+                sort_by=sort_by,
+            )
+        else:
+            raise ValueError("Either scrape_url or keywords must be provided")
         all_job_ids: list[str] = []
         seen_ids: set[str] = set()
         page_texts: list[str] = []
