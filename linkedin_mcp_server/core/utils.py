@@ -65,6 +65,32 @@ async def detect_rate_limit(page: Page) -> None:
         pass
 
 
+async def scroll_to_top(
+    page: Page, pause_time: float = 1.0, max_scrolls: int = 10
+) -> None:
+    """Scroll to the top of the page to trigger upward lazy loading.
+
+    Args:
+        page: Patchright page object
+        pause_time: Time to pause between scrolls (seconds)
+        max_scrolls: Maximum number of scroll attempts
+    """
+    for i in range(max_scrolls):
+        # window.scrollY gets the current number of pixels scrolled from the top
+        previous_position = await page.evaluate("window.scrollY")
+        
+        # Scroll to the absolute top (x: 0, y: 0)
+        await page.evaluate("window.scrollTo(0, 0)")
+        await asyncio.sleep(pause_time)
+
+        new_position = await page.evaluate("window.scrollY")
+        
+        # If the position hasn't changed (you are at 0 and no new content pushed you down)
+        if new_position == previous_position:
+            logger.debug("Reached top after %d scrolls", i + 1)
+            break
+
+
 async def scroll_to_bottom(
     page: Page, pause_time: float = 1.0, max_scrolls: int = 10
 ) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import random
 import re
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
@@ -27,6 +28,7 @@ from linkedin_mcp_server.core.utils import (
     detect_rate_limit,
     handle_modal_close,
     scroll_job_sidebar,
+    scroll_to_top,
     scroll_to_bottom,
 )
 from linkedin_mcp_server.scraping.link_metadata import (
@@ -45,10 +47,10 @@ logger = logging.getLogger(__name__)
 WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
 
 # Delay between page navigations to avoid rate limiting
-_NAV_DELAY = 2.0
+_NAV_DELAY = 13.0
 
 # Backoff before retrying a rate-limited page
-_RATE_LIMIT_RETRY_DELAY = 5.0
+_RATE_LIMIT_RETRY_DELAY = 12600.0
 
 # Returned as section text when LinkedIn rate-limits the page
 _RATE_LIMITED_MSG = "[Rate limited] LinkedIn blocked this section. Try again later or request fewer sections."
@@ -652,7 +654,7 @@ class LinkedInExtractor:
             return f"{parsed.scheme}://{parsed.netloc}/company/{parts[1]}/"
         return linkedin_url
 
-    async def _goto_jobs_section(self, linkedin_url: str) -> bool:
+    async def _goto_jobs_section(self, linkedin_url: str, max_scrolls: int | None = None) -> bool:
         try:
             path = urlparse(linkedin_url).path.strip("/")
             parts = path.split("/")
@@ -660,8 +662,8 @@ class LinkedInExtractor:
             if not company_name:
                 return False
 
-            company_root = f"https://www.linkedin.com/company/{company_name}/"
-            await self._navigate_to_page(company_root)
+            scrolls = max_scrolls if max_scrolls is not None else 10
+            await scroll_to_top(self._page, pause_time=2.0, max_scrolls=scrolls)
             await detect_rate_limit(self._page)
 
             jobs_tab_selector = f'a[href*="/company/{company_name}/jobs/"]'
@@ -722,10 +724,13 @@ class LinkedInExtractor:
         max_scrolls: int | None = None,
     ) -> ExtractedSection:
         """Single attempt to navigate, scroll, and extract innerText."""
+
+        # Wait humanlike
+        await asyncio.sleep(random.uniform(5, 15))
         
         if section_name == "jobs":
             jobs_url = self._company_root_url(url)
-            if not await self._goto_jobs_section(jobs_url):
+            if not await self._goto_jobs_section(jobs_url, max_scrolls):
                 return ExtractedSection(text="", references=[])
 
             search_button = self._page.locator(
@@ -766,6 +771,9 @@ class LinkedInExtractor:
 
         # Dismiss any modals blocking content
         await handle_modal_close(self._page)
+
+        # Wait humanlike
+        await asyncio.sleep(random.uniform(5, 35))
 
         # Activity feed pages lazy-load post content after the tab header
         is_activity = "/recent-activity/" in url
@@ -917,6 +925,10 @@ class LinkedInExtractor:
         section_name: str,
     ) -> ExtractedSection:
         """Single attempt to extract content from an overlay/modal page."""
+
+        # Wait humanlike
+        await asyncio.sleep(random.uniform(5, 15))
+
         await self._navigate_to_page(url)
         await detect_rate_limit(self._page)
 
@@ -925,6 +937,9 @@ class LinkedInExtractor:
             await self._page.wait_for_selector("dialog[open], .artdeco-modal__content")
         except PlaywrightTimeoutError:
             logger.debug("No modal overlay found on %s, falling back to main", url)
+
+        # Wait humanlike
+        await asyncio.sleep(random.uniform(5, 35))
 
         # NOTE: Do NOT call handle_modal_close() here — the contact-info
         # overlay *is* a dialog/modal. Dismissing it would destroy the
